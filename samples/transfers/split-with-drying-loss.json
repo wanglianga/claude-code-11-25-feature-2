@@ -1,0 +1,10 @@
+{
+  "external_ref": "SP-2601-001",
+  "kind": "split",
+  "mode": "uniform_share",
+  "occurred_at": "2026-11-11T12:00:00Z",
+  "note": "拆出一半投炉，声明干燥损失 0.6%（水分散失，不减金属）",
+  "sources":  [ { "lot_id": "合堆批次 id", "weight_g": 24570000 } ],
+  "destinations": [ { "pile_id": "FURNACE 堆位 id", "weight_g": 24422580, "grade_code": "CU-BRIGHT" } ],
+  "losses": [ { "weight_g": 147420, "loss_class": "drying", "note": "库内风干析出水分" } ]
+}

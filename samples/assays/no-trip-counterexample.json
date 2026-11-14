@@ -1,0 +1,4 @@
+[
+  { "sample_no": "SMP-2601-X01", "position": "车厢中部", "seal_no": "SEAL-9999",
+    "moisture_pct": 3.100, "impurity_pct": 1.200, "impurity_basis": "dry", "metal_pct": 62.000, "metal_basis": "dry" }
+]

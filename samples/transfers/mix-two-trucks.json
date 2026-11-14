@@ -1,0 +1,10 @@
+{
+  "external_ref": "MX-2601-001",
+  "kind": "mix",
+  "mode": "uniform_share",
+  "occurred_at": "2026-11-10T12:00:00Z",
+  "note": "两车料合堆至可用堆 #1，声明均匀混合",
+  "sources":  [ { "lot_id": "TRIP-1 批次 id", "weight_g": 28580000 }, { "lot_id": "TRIP-2 批次 id", "weight_g": 20560000 } ],
+  "destinations": [ { "pile_id": "USABLE-1 堆位 id", "weight_g": 49140000, "grade_code": "CU-BRIGHT" } ],
+  "losses": []
+}

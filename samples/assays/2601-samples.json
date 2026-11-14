@@ -1,0 +1,8 @@
+[
+  { "trip_key": "B-20261110-001", "sample_no": "SMP-2601-001", "position": "车厢前部", "seal_no": "SEAL-8811",
+    "moisture_pct": 3.200, "impurity_pct": 1.100, "impurity_basis": "dry", "metal_pct": 62.500, "metal_basis": "dry", "inspector": "李化验" },
+  { "trip_key": "B-20261110-002", "sample_no": "SMP-2601-002", "position": "车厢中部", "seal_no": "SEAL-8812",
+    "moisture_pct": 3.000, "impurity_pct": 1.400, "impurity_basis": "dry", "metal_pct": 61.800, "metal_basis": "dry", "inspector": "李化验" },
+  { "trip_key": "B-20261110-003", "sample_no": "SMP-2601-003", "position": "车厢后部", "seal_no": "SEAL-8813",
+    "moisture_pct": 5.600, "impurity_pct": 6.200, "impurity_basis": "dry", "metal_pct": 52.000, "metal_basis": "dry", "inspector": "李化验" }
+]

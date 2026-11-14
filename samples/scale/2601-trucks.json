@@ -1,0 +1,9 @@
+[
+  { "trip_key": "B-20261110-001", "kind": "gross", "weight_kg": 41820.000, "ticket_no": "T2601-0001", "device": "SCALE-N-01", "weighed_at": "2026-11-10T08:02:00Z" },
+  { "trip_key": "B-20261110-001", "kind": "tare",  "weight_kg": 13240.000, "ticket_no": "T2601-0002", "device": "SCALE-N-01", "weighed_at": "2026-11-10T08:09:00Z" },
+  { "trip_key": "B-20261110-002", "kind": "gross", "weight_kg": 33450.000, "ticket_no": "T2601-0003", "device": "SCALE-N-02", "weighed_at": "2026-11-10T08:42:00Z" },
+  { "trip_key": "B-20261110-002", "kind": "gross", "weight_kg": 33380.000, "ticket_no": "T2601-0004", "device": "SCALE-N-02", "weighed_at": "2026-11-10T08:52:00Z" },
+  { "trip_key": "B-20261110-002", "kind": "tare",  "weight_kg": 12820.000, "ticket_no": "T2601-0005", "device": "SCALE-N-02", "weighed_at": "2026-11-10T08:58:00Z" },
+  { "trip_key": "B-20261110-003", "kind": "gross", "weight_kg": 24610.000, "ticket_no": "T2601-0006", "device": "SCALE-N-01", "weighed_at": "2026-11-10T09:37:00Z" },
+  { "trip_key": "B-20261110-003", "kind": "tare",  "weight_kg": 13000.000, "ticket_no": "T2601-0007", "device": "SCALE-N-01", "weighed_at": "2026-11-10T09:44:00Z" }
+]

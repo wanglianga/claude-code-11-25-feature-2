@@ -346,7 +346,197 @@ func (a *App) SeedDemo(ctx context.Context) error {
 	if after := a.pileWeight(ctx, piles["SHIP-1"]); after != before {
 		return fmt.Errorf("replay moved material: %d -> %d", before, after)
 	}
+	return a.seedRecallStory(ctx, quality, yard, lab, purchasing, day, supA, contractA, piles)
+}
+
+// seedRecallStory builds the quality-incident scenario exercised by the recall
+// feature on its own truck (B-...-004) so the diamond is unambiguous:
+//
+//	T4 is split into two branches (A: uniform share, B: source proportion
+//	unknown). Both branches re-merge in usable pile #1 — a diamond that naive
+//	recursive summing would count twice. Part of the rejoined pile is charged to
+//	the furnace and part is shipped, so the incident has material that can no
+//	longer be recovered. The B branch being unknown forces the recall to report
+//	lower/upper bounds instead of a fake exact number.
+func (a *App) seedRecallStory(ctx context.Context, quality, yard, lab, purchasing User, day time.Time, supplierID, contractID int64, piles map[string]int64) error {
+	// --- truck 4: the problem truck -------------------------------------------------
+	trip4, err := a.CreateTrip(ctx, purchasing, CreateTripInput{
+		SupplierID: supplierID, ContractID: contractID, PlateNo: "浙B-40122", Driver: "周师傅",
+		ArrivalAt: day.Add(6 * time.Hour), Note: "第四车 排查演示：与好料混堆后分两支再汇合"})
+	if err != nil {
+		return fmt.Errorf("recall seed trip4: %w", err)
+	}
+	addTruck := func(tripID int64, gross, tare int64, ticket string, sampleNo, seal string, impurity int64) error {
+		g, err := a.AddWeighing(ctx, yard, tripID, Weighing{Kind: "gross", WeightG: gross,
+			TicketNo: ticket, WeighedAt: day.Add(6 * time.Hour), ScaleDevice: "SCALE-N-03"})
+		if err != nil {
+			return err
+		}
+		tr, err := a.AddWeighing(ctx, yard, tripID, Weighing{Kind: "tare", WeightG: tare,
+			TicketNo: ticket + "-T", WeighedAt: day.Add(6*time.Hour + 7*time.Minute), ScaleDevice: "SCALE-N-03"})
+		if err != nil {
+			return err
+		}
+		if _, err := a.AdoptWeights(ctx, yard, tripID, g.ID, tr.ID, "净重按毛重-皮重采用"); err != nil {
+			return err
+		}
+		smp, err := a.CreateSample(ctx, lab, tripID, CreateSampleInput{SampleNo: sampleNo,
+			Position: "车厢中部", SealNo: seal, SealedAt: day.Add(6*time.Hour + 20*time.Minute), Note: "排查演示封样"})
+		if err != nil {
+			return err
+		}
+		as, err := a.AddAssay(ctx, lab, smp.ID, Assay{MoisturePPM: 30_000, ImpurityPPM: i64p(impurity),
+			ImpurityBasis: "dry", MetalPPM: 610_000, MetalBasis: "dry", Inspector: "李化验"})
+		if err != nil {
+			return err
+		}
+		if _, err := a.AdoptAssay(ctx, quality, as.ID, "采用"); err != nil {
+			return err
+		}
+		_, err = a.ApproveGrade(ctx, quality, tripID, "CU-BRIGHT", false, "入库时等级正常")
+		return err
+	}
+	if err := addTruck(trip4.ID, 30_000_000, 12_000_000, "T2601-0101", "SMP-2601-004", "SEAL-8814", 20_000); err != nil {
+		return err
+	}
+	// --- truck 5: clean material used to make the sort genuinely ambiguous ---------
+	trip5, err := a.CreateTrip(ctx, purchasing, CreateTripInput{
+		SupplierID: supplierID, ContractID: contractID, PlateNo: "浙B-55880", Driver: "吴师傅",
+		ArrivalAt: day.Add(6*time.Hour + 30*time.Minute), Note: "第五车 正常好料，与第四车混堆"})
+	if err != nil {
+		return err
+	}
+	if err := addTruck(trip5.ID, 24_000_000, 12_000_000, "T2601-0103", "SMP-2601-005", "SEAL-8815", 8_000); err != nil {
+		return err
+	}
+	if _, err := a.Intake(ctx, yard, IntakeInput{TripID: trip4.ID, PileID: piles["RECV-A"]}); err != nil {
+		return err
+	}
+	if _, err := a.Intake(ctx, yard, IntakeInput{TripID: trip5.ID, PileID: piles["RECV-A"]}); err != nil {
+		return err
+	}
+	t4Lot := a.lotIDForTrip(ctx, trip4.ID)
+	t5Lot := a.lotIDForTrip(ctx, trip5.ID)
+	var w4, w5 int64
+	if err := a.DB.Pool.QueryRow(ctx, `select weight_g from rt.inventory_lots where id=$1`, t4Lot).Scan(&w4); err != nil {
+		return err
+	}
+	if err := a.DB.Pool.QueryRow(ctx, `select weight_g from rt.inventory_lots where id=$1`, t5Lot).Scan(&w5); err != nil {
+		return err
+	}
+	if w4 < 4_000_000 || w5 < 4_000_000 {
+		return fmt.Errorf("recall seed: lots too small (%d / %d g)", w4, w5)
+	}
+	// Mix the two trucks: the problem material is now only a share of the pile.
+	if _, err := a.Transfer(ctx, yard, TransferInput{
+		ExternalRef: "RC-MIX", Kind: "mix", Mode: "uniform_share",
+		Note:         "排查演示：第四车与第五车均匀混堆（问题料只占其中一部分）",
+		Sources:      []SourceLine{{LotID: t4Lot, WeightG: w4}, {LotID: t5Lot, WeightG: w5}},
+		Destinations: []DestLine{{PileID: piles["USABLE-2"], WeightG: w4 + w5, GradeCode: "CU-BRIGHT"}},
+	}); err != nil {
+		return fmt.Errorf("recall seed mix: %w", err)
+	}
+	mixed := a.latestInboundLot(ctx, piles["USABLE-2"])
+	var mw int64
+	if err := a.DB.Pool.QueryRow(ctx, `select weight_g from rt.inventory_lots where id=$1`, mixed).Scan(&mw); err != nil {
+		return err
+	}
+	// Split the mixed pile into two branches with UNKNOWN source sorting: how much
+	// of each branch is problem material is genuinely unknown, hence bounds.
+	aW := mw * 2 / 5
+	bW := mw - aW
+	if _, err := a.Transfer(ctx, yard, TransferInput{
+		ExternalRef: "RC-BRANCH-A", Kind: "split", Mode: "unknown",
+		Note:         "排查演示：混堆拆 A 支到可用堆 #1，来源分拣记录不全（以下界/上界表示）",
+		Sources:      []SourceLine{{LotID: mixed, WeightG: aW}},
+		Destinations: []DestLine{{PileID: piles["USABLE-1"], WeightG: aW, GradeCode: "CU-BRIGHT"}},
+	}); err != nil {
+		return fmt.Errorf("recall seed branch A: %w", err)
+	}
+	if _, err := a.Transfer(ctx, yard, TransferInput{
+		ExternalRef: "RC-BRANCH-B", Kind: "split", Mode: "unknown",
+		Note:         "排查演示：混堆拆 B 支到接收区，来源分拣记录同样不全",
+		Sources:      []SourceLine{{LotID: mixed, WeightG: bW}},
+		Destinations: []DestLine{{PileID: piles["RECV-A"], WeightG: bW, GradeCode: "CU-BRIGHT"}},
+	}); err != nil {
+		return fmt.Errorf("recall seed branch B: %w", err)
+	}
+	branchA := a.latestInboundLot(ctx, piles["USABLE-1"])
+	branchB := a.latestInboundLot(ctx, piles["RECV-A"])
+	rejoinA := aW * 3 / 4
+	rejoinB := bW * 3 / 4
+	// Re-merge most of both branches into one pile: two paths converge again.
+	if _, err := a.Transfer(ctx, yard, TransferInput{
+		ExternalRef: "RC-REJOIN", Kind: "mix", Mode: "uniform_share",
+		Note:         "排查演示：A、B 两支 3/4 重新汇合到可用堆 #1（汇合按来源流量归并，不重复计数）",
+		Sources:      []SourceLine{{LotID: branchA, WeightG: rejoinA}, {LotID: branchB, WeightG: rejoinB}},
+		Destinations: []DestLine{{PileID: piles["USABLE-1"], WeightG: rejoinA + rejoinB, GradeCode: "CU-BRIGHT"}},
+	}); err != nil {
+		return fmt.Errorf("recall seed rejoin: %w", err)
+	}
+	rejoined := a.latestInboundLot(ctx, piles["USABLE-1"])
+	var reW int64
+	if err := a.DB.Pool.QueryRow(ctx, `select weight_g from rt.inventory_lots where id=$1`, rejoined).Scan(&reW); err != nil {
+		return err
+	}
+	toFurnace := reW * 2 / 5
+	toShip := reW * 3 / 10
+	if toFurnace > 0 {
+		if _, err := a.Transfer(ctx, yard, TransferInput{
+			ExternalRef: "RC-FURNACE", Kind: "split", Mode: "uniform_share",
+			Note:         "排查演示：汇合堆 2/5 投炉（在制，已无法追回）",
+			Sources:      []SourceLine{{LotID: rejoined, WeightG: toFurnace}},
+			Destinations: []DestLine{{PileID: piles["FURNACE"], WeightG: toFurnace, GradeCode: "CU-BRIGHT"}},
+		}); err != nil {
+			return fmt.Errorf("recall seed furnace: %w", err)
+		}
+	}
+	if toShip > 0 {
+		if _, err := a.Transfer(ctx, yard, TransferInput{
+			ExternalRef: "RC-SHIP", Kind: "ship", Mode: "uniform_share",
+			Note:         "排查演示：汇合堆 3/10 出库（已发产品，已无法追回）",
+			Sources:      []SourceLine{{LotID: rejoined, WeightG: toShip}},
+			Destinations: []DestLine{{PileID: piles["SHIP-1"], WeightG: toShip, GradeCode: "CU-BRIGHT"}},
+		}); err != nil {
+			return fmt.Errorf("recall seed ship: %w", err)
+		}
+	}
+	// Declare the incident on truck 4 and snapshot the downstream picture.
+	ev, err := a.CreateQualityEvent(ctx, quality, QualityEventInput{
+		EventNo: "QEV-2601-001", Kind: "risk_range", TripID: trip4.ID,
+		Param: "impurity_ppm", MinPPM: 20_000, MaxPPM: 32_000, Basis: "customer_complaint",
+		Note: "客户反馈混料后杂质偏高；该车杂质风险 2.0%–3.2%，沿带数量转移关系排查下游",
+	})
+	if err != nil {
+		return fmt.Errorf("recall seed event: %w", err)
+	}
+	inv, err := a.Investigate(ctx, quality, ev.ID)
+	if err != nil {
+		return fmt.Errorf("recall seed investigate: %w", err)
+	}
+	_, err = a.ApplyIsolation(ctx, quality, ApplyIsolationInput{
+		OrderNo: "ISO-2601-001", EventID: ev.ID, InvestigationID: inv.ID,
+		ScopeNote: "按排查快照命中所有在库节点；在制与已发继续追查，不回滚",
+	})
+	if err != nil {
+		return fmt.Errorf("recall seed apply: %w", err)
+	}
 	return nil
+}
+
+// lotIDForTrip returns the trip's own intake lot id.
+func (a *App) lotIDForTrip(ctx context.Context, tripID int64) int64 {
+	var id int64
+	_ = a.DB.Pool.QueryRow(ctx, `select id from rt.inventory_lots where lot_key=$1`, fmt.Sprintf("TRIP-%d", tripID)).Scan(&id)
+	return id
+}
+
+// latestInboundLot returns the most recent destination lot created into a pile.
+func (a *App) latestInboundLot(ctx context.Context, pileID int64) int64 {
+	var id int64
+	_ = a.DB.Pool.QueryRow(ctx, `select l.id from rt.inventory_lots l
+		where l.pile_id=$1 and l.weight_g > 0 order by l.id desc limit 1`, pileID).Scan(&id)
+	return id
 }
 
 func (a *App) lotIDForKey(ctx context.Context, key string) (int64, error) {

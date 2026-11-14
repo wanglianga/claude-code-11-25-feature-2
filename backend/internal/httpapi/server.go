@@ -87,6 +87,22 @@ func (s *Server) routes() {
 
 	m.HandleFunc("GET /api/reconciliation", s.authed(s.handleReconcile, ""))
 
+	// 质量事件 → 下游排查 → 隔离处置
+	m.HandleFunc("GET /api/quality/events", s.authed(s.handleQualityEvents, ""))
+	m.HandleFunc("POST /api/quality/events", s.authed(s.handleCreateQualityEvent, "quality,admin"))
+	m.HandleFunc("GET /api/quality/events/{id}", s.authed(s.handleGetQualityEvent, ""))
+	m.HandleFunc("POST /api/quality/events/{id}/investigate", s.authed(s.handleInvestigate, "quality,admin"))
+	m.HandleFunc("GET /api/quality/events/{id}/investigations", s.authed(s.handleInvestigations, ""))
+	m.HandleFunc("GET /api/quality/events/{id}/holds", s.authed(s.handleEventHolds, ""))
+	m.HandleFunc("POST /api/quality/events/{id}/close", s.authed(s.handleCloseEvent, "quality,admin"))
+	m.HandleFunc("GET /api/quality/investigations/{id}", s.authed(s.handleGetInvestigation, ""))
+	m.HandleFunc("POST /api/quality/isolation", s.authed(s.handleApplyIsolation, "quality,admin"))
+	m.HandleFunc("GET /api/quality/isolation", s.authed(s.handleListIsolation, ""))
+	m.HandleFunc("GET /api/quality/isolation/{id}", s.authed(s.handleGetIsolation, ""))
+	m.HandleFunc("POST /api/quality/isolation/{id}/approve", s.authed(s.handleApproveIsolation, "quality,admin"))
+	m.HandleFunc("POST /api/quality/isolation/{id}/review", s.authed(s.handleReviewIsolation, "quality,admin"))
+	m.HandleFunc("GET /api/lots/{id}/holds", s.authed(s.handleLotHolds, ""))
+
 	m.HandleFunc("GET /api/intake", s.authed(s.handlePendingIntake, ""))
 	m.HandleFunc("POST /api/ingest/scale", s.authed(s.handleIngestScale, "yard,purchasing,admin"))
 	m.HandleFunc("POST /api/ingest/assays", s.authed(s.handleIngestAssays, "lab,admin"))

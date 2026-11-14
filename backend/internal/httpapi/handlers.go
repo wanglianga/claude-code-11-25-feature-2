@@ -494,3 +494,149 @@ func (s *Server) handleIngestTransfers(w http.ResponseWriter, r *http.Request, u
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
+
+// ------------------------------------------------------------------ quality
+
+func (s *Server) handleQualityEvents(w http.ResponseWriter, r *http.Request, u app.User) {
+	out, err := s.App.ListQualityEvents(r.Context())
+	if err != nil {
+		writeAppErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleCreateQualityEvent(w http.ResponseWriter, r *http.Request, u app.User) {
+	var in app.QualityEventInput
+	if err := decode(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "请求格式错误: "+err.Error())
+		return
+	}
+	out, err := s.App.CreateQualityEvent(r.Context(), u, in)
+	if err != nil {
+		writeAppErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+func (s *Server) handleGetQualityEvent(w http.ResponseWriter, r *http.Request, u app.User) {
+	out, err := s.App.GetQualityEvent(r.Context(), pathID(r, "id"))
+	if err != nil {
+		writeAppErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleInvestigate(w http.ResponseWriter, r *http.Request, u app.User) {
+	out, err := s.App.Investigate(r.Context(), u, pathID(r, "id"))
+	if err != nil {
+		writeAppErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+func (s *Server) handleInvestigations(w http.ResponseWriter, r *http.Request, u app.User) {
+	out, err := s.App.ListInvestigations(r.Context(), pathID(r, "id"))
+	if err != nil {
+		writeAppErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleGetInvestigation(w http.ResponseWriter, r *http.Request, u app.User) {
+	out, err := s.App.GetInvestigation(r.Context(), pathID(r, "id"))
+	if err != nil {
+		writeAppErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleEventHolds(w http.ResponseWriter, r *http.Request, u app.User) {
+	out, err := s.App.ListHoldsByEvent(r.Context(), pathID(r, "id"))
+	if err != nil {
+		writeAppErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleCloseEvent(w http.ResponseWriter, r *http.Request, u app.User) {
+	out, err := s.App.CloseEvent(r.Context(), u, pathID(r, "id"))
+	if err != nil {
+		writeAppErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleApplyIsolation(w http.ResponseWriter, r *http.Request, u app.User) {
+	var in app.ApplyIsolationInput
+	if err := decode(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "请求格式错误: "+err.Error())
+		return
+	}
+	out, err := s.App.ApplyIsolation(r.Context(), u, in)
+	if err != nil {
+		writeAppErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+func (s *Server) handleListIsolation(w http.ResponseWriter, r *http.Request, u app.User) {
+	out, err := s.App.ListIsolationOrders(r.Context())
+	if err != nil {
+		writeAppErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleGetIsolation(w http.ResponseWriter, r *http.Request, u app.User) {
+	out, err := s.App.GetIsolationOrder(r.Context(), pathID(r, "id"))
+	if err != nil {
+		writeAppErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleApproveIsolation(w http.ResponseWriter, r *http.Request, u app.User) {
+	out, err := s.App.ApproveIsolation(r.Context(), u, pathID(r, "id"))
+	if err != nil {
+		writeAppErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleReviewIsolation(w http.ResponseWriter, r *http.Request, u app.User) {
+	var in struct {
+		ScopeLotIDs []int64 `json:"scope_lot_ids"`
+		ScopeNote   string  `json:"scope_note"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "请求格式错误: "+err.Error())
+		return
+	}
+	out, err := s.App.ReviewIsolation(r.Context(), u, pathID(r, "id"), in.ScopeLotIDs, in.ScopeNote)
+	if err != nil {
+		writeAppErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleLotHolds(w http.ResponseWriter, r *http.Request, u app.User) {
+	out, err := s.App.ActiveHoldsForLot(r.Context(), s.App.DB.Pool, pathID(r, "id"))
+	if err != nil {
+		writeAppErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}

@@ -1,0 +1,10 @@
+{
+  "event_no": "QEV-2601-001",
+  "kind": "risk_range",
+  "trip_key": "B-20261110-004",
+  "param": "impurity_ppm",
+  "min_ppm": 20000,
+  "max_ppm": 32000,
+  "basis": "customer_complaint",
+  "note": "客户反馈混料后杂质偏高；该车杂质风险 2.0%–3.2%，沿带数量转移关系排查下游。混堆后分两支（其中一支来源分拣记录不全），再汇合，因此受影响量给区间；一部分已发货、一部分在制。"
+}

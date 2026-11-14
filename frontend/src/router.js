@@ -8,6 +8,7 @@ import Stock from './views/Stock.vue'
 import Payables from './views/Payables.vue'
 import Reconciliation from './views/Reconciliation.vue'
 import Movements from './views/Movements.vue'
+import Quality from './views/Quality.vue'
 
 const routes = [
   { path: '/login', component: Login, meta: { public: true } },
@@ -18,6 +19,7 @@ const routes = [
   { path: '/payables', component: Payables },
   { path: '/reconciliation', component: Reconciliation },
   { path: '/movements', component: Movements },
+  { path: '/quality', component: Quality },
 ]
 
 const router = createRouter({ history: createWebHistory(), routes })

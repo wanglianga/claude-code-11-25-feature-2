@@ -90,6 +90,88 @@ t=$(curl -s "$BASE/api/reconciliation" -H "Authorization: Bearer $FIN")
 echo "$t" | jq -e '.totals.gap_g==0 and .totals.gap_metal_mg==0' >/dev/null \
   && pass "重量尾差与金属尾差均为 0" || bad "存在尾差: $(echo "$t" | jq -c .totals)"
 
+echo "== 13. 排查：两条路径汇合不重复计数 =="
+QTOK=$(tok quality quality123)
+inv=$(curl -s "$BASE/api/quality/investigations/1" -H "Authorization: Bearer $QTOK")
+echo "$inv" | jq -e '.node_count>0 and .cap_violations==0' >/dev/null \
+  && pass "所有节点影响量均未超过其历史接收量" || bad "存在节点影响量超过历史接收量"
+up=$(echo "$inv" | jq -r .upper_g)
+src=$(echo "$inv" | jq -r .source_intake_g)
+[ "$up" -le "$src" ] && pass "受影响量上界 $up g ≤ 源车接收量 $src g（汇合未重复计数）" || bad "上界超过源车接收量 ($up > $src)"
+
+echo "== 14. 分拣未知：给出下界/上界且不伪装精确 =="
+lo=$(echo "$inv" | jq -r .lower_g)
+echo "$inv" | jq -e '.exact==false and (.lower_g < .upper_g)' >/dev/null \
+  && pass "排查结果标记为区间：$lo g – $up g" || bad "未知分拣未给出区间"
+
+echo "== 15. 存量/在制/已发分别列出且核对 =="
+echo "$inv" | jq -e '.on_hand_g>0 and .shipped_g>0 and .production_g>0 and .unrecoverable_g>0 and .reconcile.gap_g==0 and .reconcile.balanced==true' >/dev/null \
+  && pass "存量/在制/已发分列，处置合计与源车可解释范围核对一致" || bad "去向分列或核对异常: $(echo "$inv" | jq -c .reconcile)"
+
+echo "== 16. 隔离申请展示依赖存量与在途动作 =="
+ord=$(curl -s "$BASE/api/quality/isolation/1" -H "Authorization: Bearer $QTOK")
+echo "$ord" | jq -e '.status=="pending" or .status=="active"' >/dev/null || bad "处置单 1 缺失"
+echo "$ord" | jq -e '(.depending|length)>0 and (.in_flight|length)>0' >/dev/null \
+  && pass "处置单展示依赖存量 $(echo "$ord"|jq -r '.depending|length') 项、在途动作 $(echo "$ord"|jq -r '.in_flight|length') 项" \
+  || bad "处置单未展示依赖存量或在途动作"
+
+echo "== 17. 批准隔离后阻断新领料 =="
+curl -s -X POST "$BASE/api/quality/isolation/1/approve" -H "Authorization: Bearer $QTOK" > /tmp/iso_approve.json 2>/dev/null
+status=$(jq -r '.status // empty' /tmp/iso_approve.json 2>/dev/null)
+held=$(q "select count(*) from rt.lot_holds where order_id=1 and released=false")
+if [ "$status" = "active" ] || [ "$held" -gt 0 ]; then
+  pass "隔离生效，阻断 $held 个在库批次"
+else
+  bad "隔离未生效: status=$status held=$held"
+fi
+heldlot=$(q "select lot_id from rt.lot_holds where released=false limit 1")
+if [ -n "$heldlot" ]; then
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/transfers" -H "Authorization: Bearer $YARD" -H 'Content-Type: application/json' \
+    -d "{\"external_ref\":\"VERIFY-HELD\",\"kind\":\"split\",\"mode\":\"uniform_share\",\"sources\":[{\"lot_id\":$heldlot,\"weight_g\":1000}],\"destinations\":[{\"pile_id\":$(q "select id from rt.piles where code='RECV-A'"),\"weight_g\":1000,\"grade_code\":\"CU-BRIGHT\"}]}"})
+  [ "$code" = "409" ] && pass "被阻断批次的新领料被拒绝 (HTTP $code)" || bad "被阻断批次仍可领料 (HTTP $code)"
+fi
+
+echo "== 18. 部分复核：剩余继续阻断 =="
+first=$(q "select lot_id from rt.lot_holds where order_id=1 and released=false order by lot_id limit 1")
+curl -s -X POST "$BASE/api/quality/isolation/1/review" -H "Authorization: Bearer $QTOK" -H 'Content-Type: application/json' \
+  -d "{\"scope_lot_ids\":[$first],\"scope_note\":\"仅复核一个批次\"}" >/dev/null
+left=$(q "select count(*) from rt.lot_holds where order_id=1 and released=false")
+[ "$left" -ge 1 ] && pass "只复核部分后仍有 $left 个批次阻断" || bad "部分复核错误释放了全部"
+
+echo "== 19. 事件重试不重复扩大持有 =="
+before=$(q "select count(*) from rt.lot_holds where event_id=1")
+curl -s -X POST "$BASE/api/quality/events" -H "Authorization: Bearer $QTOK" -H 'Content-Type: application/json' \
+  -d '{"event_no":"QEV-2601-001","kind":"risk_range","trip_id":4,"param":"impurity_ppm","min_ppm":20000,"max_ppm":32000,"basis":"customer_complaint","note":"重试"}' >/dev/null
+after=$(q "select count(*) from rt.lot_holds where event_id=1")
+[ "$before" = "$after" ] && pass "重试同一事件号未新增持有（$after）" || bad "事件重试扩大了持有 $before -> $after"
+
+echo "== 20. 多起事件重叠必须全部复核 =="
+E2=$(curl -s -X POST "$BASE/api/quality/events" -H "Authorization: Bearer $QTOK" -H 'Content-Type: application/json' \
+  -d '{"event_no":"QEV-2601-002","kind":"composition","trip_id":5,"param":"metal_ppm","min_ppm":580000,"max_ppm":580000,"basis":"manual","note":"重叠事件"}' | jq -r .id)
+INV2=$(curl -s -X POST "$BASE/api/quality/events/$E2/investigate" -H "Authorization: Bearer $QTOK" | jq -r .id)
+O2=$(curl -s -X POST "$BASE/api/quality/isolation" -H "Authorization: Bearer $QTOK" -H 'Content-Type: application/json' \
+  -d "{\"order_no\":\"ISO-2601-VERIFY-2\",\"event_id\":$E2,\"investigation_id\":$INV2}" | jq -r .id)
+curl -s -X POST "$BASE/api/quality/isolation/$O2/approve" -H "Authorization: Bearer $QTOK" >/dev/null
+shared=$(q "select lot_id from rt.lot_holds where event_id=$E2 and released=false limit 1")
+if [ -n "$shared" ]; then
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/transfers" -H "Authorization: Bearer $YARD" -H 'Content-Type: application/json' \
+    -d "{\"external_ref\":\"VERIFY-OVERLAP\",\"kind\":\"split\",\"mode\":\"uniform_share\",\"sources\":[{\"lot_id\":$shared,\"weight_g\":1000}],\"destinations\":[{\"pile_id\":$(q "select id from rt.piles where code='RECV-A'"),\"weight_g\":1000,\"grade_code\":\"CU-BRIGHT\"}]}"})
+  [ "$code" = "409" ] && pass "重叠事件的批次仍被阻断 (HTTP $code)" || bad "重叠事件未阻断 (HTTP $code)"
+fi
+
+echo "== 21. 旧排查结果在新转移后不得直接批准 =="
+E3=$(curl -s -X POST "$BASE/api/quality/events" -H "Authorization: Bearer $QTOK" -H 'Content-Type: application/json' \
+  -d '{"event_no":"QEV-2601-STALE","kind":"composition","trip_id":4,"param":"impurity_ppm","min_ppm":20000,"max_ppm":20000,"basis":"manual","note":"过期快照测试"}' | jq -r .id)
+INV3=$(curl -s -X POST "$BASE/api/quality/events/$E3/investigate" -H "Authorization: Bearer $QTOK" | jq -r .id)
+O3=$(curl -s -X POST "$BASE/api/quality/isolation" -H "Authorization: Bearer $QTOK" -H 'Content-Type: application/json' \
+  -d "{\"order_no\":\"ISO-2601-STALE\",\"event_id\":$E3,\"investigation_id\":$INV3}" | jq -r .id)
+free=$(q "select l.id from rt.inventory_lots l join rt.piles p on p.id=l.pile_id where p.kind='isolated' and l.weight_g>1000 limit 1")
+curl -s -X POST "$BASE/api/transfers" -H "Authorization: Bearer $YARD" -H 'Content-Type: application/json' \
+  -d "{\"external_ref\":\"VERIFY-EPOCH\",\"kind\":\"split\",\"mode\":\"uniform_share\",\"sources\":[{\"lot_id\":$free,\"weight_g\":1000}],\"destinations\":[{\"pile_id\":$(q "select id from rt.piles where code='ISO-1'"),\"weight_g\":1000,\"grade_code\":\"CU-DIRTY\"}]}" >/dev/null
+resp=$(curl -s -X POST "$BASE/api/quality/isolation/$O3/approve" -H "Authorization: Bearer $QTOK")
+echo "$resp" | jq -e '.error != null' >/dev/null \
+  && pass "新转移后旧排查快照被拒绝批准" || bad "旧排查快照仍可直接批准: $resp"
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL CHECKS PASSED"; else echo "SOME CHECKS FAILED"; fi
 exit "$fail"

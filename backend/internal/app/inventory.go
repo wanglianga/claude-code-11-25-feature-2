@@ -217,6 +217,37 @@ func allocateMatrix(rowTotals, colTotals []int64) ([][]int64, [][]int64) {
 
 // ------------------------------------------------------------------ intake
 
+// activeHoldsForLots returns unreleased holds for any of the given lots. The
+// transfer takes the stock-world advisory lock before this read, and isolation
+// approval takes the same lock, so the two never interleave: either the transfer
+// commits first (approval then fails its epoch check because stock moved) or the
+// hold commits first (and this read blocks the draw). Row locks alone are not
+// enough here because a hold can be written for a lot no transfer has touched.
+func activeHoldsForLots(ctx context.Context, tx pgx.Tx, ids []int64) ([]HoldView, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `select h.id, h.event_id, e.event_no, h.lot_id, h.lot_key, h.pile_name,
+		h.hit_weight_g, h.hit_lower_g, h.hit_upper_g, h.basis, h.released, l.weight_g
+		from rt.lot_holds h join rt.quality_events e on e.id=h.event_id
+		join rt.inventory_lots l on l.id=h.lot_id
+		where h.lot_id = any($1::bigint[]) and h.released=false order by h.lot_id, h.id`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []HoldView{}
+	for rows.Next() {
+		var h HoldView
+		if err := rows.Scan(&h.ID, &h.EventID, &h.EventNo, &h.LotID, &h.LotKey, &h.PileName,
+			&h.HitWeightG, &h.HitLowerG, &h.HitUpperG, &h.Basis, &h.Released, &h.CurrentG); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
 type IntakeInput struct {
 	TripID     int64  `json:"trip_id"`
 	PileID     int64  `json:"pile_id"`
@@ -232,6 +263,9 @@ func (a *App) Intake(ctx context.Context, actor User, in IntakeInput) (Lot, erro
 	}
 	var lotID int64
 	err := a.DB.Tx(ctx, func(tx pgx.Tx) error {
+		if err := lockStockWorld(ctx, tx); err != nil {
+			return err
+		}
 		adoption, err := currentAdoption(ctx, tx, in.TripID)
 		if err != nil {
 			return err
@@ -298,7 +332,10 @@ func (a *App) Intake(ctx context.Context, actor User, in IntakeInput) (Lot, erro
 		_, err = tx.Exec(ctx, `insert into rt.audit_log(actor_id, action, entity, entity_id, detail)
 			values($1,'intake','lot',$2,$3)`, actor.ID, fmt.Sprint(lotID), map[string]any{
 			"trip_id": in.TripID, "net_g": adoption.NetG, "metal_mg": metalMg, "pile_id": in.PileID})
-		return err
+		if err != nil {
+			return err
+		}
+		return bumpEpoch(ctx, tx)
 	})
 	if err != nil {
 		return Lot{}, err
@@ -375,6 +412,9 @@ func (a *App) Transfer(ctx context.Context, actor User, in TransferInput) (Movem
 
 	var movID int64
 	err := a.DB.Tx(ctx, func(tx pgx.Tx) error {
+		if err := lockStockWorld(ctx, tx); err != nil {
+			return err
+		}
 		var dup int64
 		err := tx.QueryRow(ctx, `select id from rt.movements where external_ref=$1`, in.ExternalRef).Scan(&dup)
 		if err == nil {
@@ -391,6 +431,16 @@ func (a *App) Transfer(ctx context.Context, actor User, in TransferInput) (Movem
 		lots, err := lockLots(ctx, tx, ids)
 		if err != nil {
 			return err
+		}
+		// A lot held by an active isolation order cannot be drawn again. The hold
+		// is read after the rows are locked, so a concurrent approval either
+		// commits before this read (blocking here) or after this transfer commits
+		// (and then fails its epoch check because stock moved).
+		if active, err := activeHoldsForLots(ctx, tx, ids); err != nil {
+			return err
+		} else if len(active) > 0 {
+			h := active[0]
+			return blocked("批次 %s 处于事件 %s 的隔离阻断，不能领料/转移（需解除隔离后才放行）", h.LotKey, h.EventNo)
 		}
 		kindByPile, err := pileKinds(ctx, tx)
 		if err != nil {
@@ -979,7 +1029,12 @@ func (a *App) Transfer(ctx context.Context, actor User, in TransferInput) (Movem
 			values($1,'transfer.apply','movement',$2,$3)`, actor.ID, fmt.Sprint(movID), map[string]any{
 			"external_ref": in.ExternalRef, "kind": in.Kind, "mode": in.Mode, "out_g": outW,
 			"loss_g": lossW, "in_g": inW, "out_metal_mg": outM, "process_metal_loss_mg": processMetalLoss})
-		return err
+		if err != nil {
+			return err
+		}
+		// Every applied transfer invalidates any investigation snapshot taken
+		// before it; approval of an isolation order compares this epoch.
+		return bumpEpoch(ctx, tx)
 	})
 	if err != nil {
 		return Movement{}, err
